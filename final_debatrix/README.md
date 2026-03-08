@@ -1,19 +1,19 @@
 # Debatrix - AI Debate Platform
 
-A modern, full-stack AI-powered debate platform where AI personas engage in structured, turn-based debates on any topic. Watch real-time argumentation, vote on the most compelling points, and explore the future of AI-driven discourse.
+A modern, full-stack AI-powered debate platform where AI personas engage in structured, turn-based debates on any topic. Watch real-time argumenttion, vote on the most compelling points, and explore the future of AI-driven discourse.
 
 ## Key Metrics
 
 > **Resume-Ready Performance & Testing Highlights**
 
-| Metric | Value |
-|--------|-------|
-| **Test Coverage** | 63 unit tests across 3 test suites |
-| **Test Pass Rate** | 100% (63/63 tests passing) |
-| **Test Execution Time** | <2 seconds total |
-| **Codebase Size** | 50+ TypeScript files |
-| **API Endpoints** | 15+ REST endpoints + GraphQL |
-| **Real-time Events** | 5 WebSocket event types |
+| Metric                  | Value                              |
+| ----------------------- | ---------------------------------- |
+| **Test Coverage**       | 63 unit tests across 3 test suites |
+| **Test Pass Rate**      | 100% (63/63 tests passing)         |
+| **Test Execution Time** | <2 seconds total                   |
+| **Codebase Size**       | 50+ TypeScript files               |
+| **API Endpoints**       | 15+ REST endpoints + GraphQL       |
+| **Real-time Events**    | 5 WebSocket event types            |
 
 ### Performance Optimizations
 
@@ -33,14 +33,14 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 
 ### Testing Strategy
 
-| Test Type | Coverage |
-|-----------|----------|
-| **Storage Layer** | CRUD operations, data integrity, relationship handling |
-| **API Validation** | Input validation, field requirements, type checking |
-| **Business Logic** | State transitions, analytics calculations, deduplication |
-| **Search/Filter** | Query parameters, sorting, filtering algorithms |
-| **Rate Limiting** | Request counting, window expiration, limit enforcement |
-| **WebSocket Events** | Message parsing, event type handling |
+| Test Type            | Coverage                                                 |
+| -------------------- | -------------------------------------------------------- |
+| **Storage Layer**    | CRUD operations, data integrity, relationship handling   |
+| **API Validation**   | Input validation, field requirements, type checking      |
+| **Business Logic**   | State transitions, analytics calculations, deduplication |
+| **Search/Filter**    | Query parameters, sorting, filtering algorithms          |
+| **Rate Limiting**    | Request counting, window expiration, limit enforcement   |
+| **WebSocket Events** | Message parsing, event type handling                     |
 
 ### Architecture Highlights (FAANG-Level)
 
@@ -72,6 +72,7 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 ## Features
 
 ### Core Features
+
 - **AI-Powered Debates**: Create debates between AI personas powered by OpenAI GPT-4o-mini
 - **Real-Time Updates**: Watch debates unfold live with WebSocket-powered streaming
 - **Customizable Personas**: Create AI debaters with unique names, tones, and ideological biases
@@ -80,6 +81,7 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 - **AI Judgment**: Automatic winner determination with detailed reasoning
 
 ### Platform Features
+
 - **Debate Controls**: Play, pause, resume, and skip to judgment
 - **Analytics Dashboard**: Platform statistics, trending topics, and activity feeds
 - **Persona Management**: Full CRUD operations with performance statistics (win rate, arguments, votes)
@@ -87,6 +89,7 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 - **Dark/Light Mode**: Full theme support with system preference detection
 
 ### Technical Features
+
 - **GraphQL API**: Flexible data fetching alongside REST endpoints
 - **Redis Caching**: Optional caching layer for improved performance
 - **Background Jobs**: BullMQ-powered job queue for AI generation
@@ -96,21 +99,21 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 
 ## Tech Stack
 
-| Category | Technology |
-|----------|------------|
-| **Runtime** | Node.js 20+ |
-| **Language** | TypeScript |
-| **Frontend** | React 18 + Vite |
-| **Styling** | Tailwind CSS + shadcn/ui |
-| **Backend** | Express.js |
-| **API** | REST + GraphQL (Apollo Server) |
-| **Database** | PostgreSQL (Neon) |
-| **ORM** | Drizzle ORM |
-| **Caching** | Redis (optional) |
-| **Job Queue** | BullMQ |
-| **Real-time** | WebSockets (ws) |
-| **AI** | OpenAI GPT-4o-mini |
-| **Testing** | Vitest |
+| Category      | Technology                     |
+| ------------- | ------------------------------ |
+| **Runtime**   | Node.js 20+                    |
+| **Language**  | TypeScript                     |
+| **Frontend**  | React 18 + Vite                |
+| **Styling**   | Tailwind CSS + shadcn/ui       |
+| **Backend**   | Express.js                     |
+| **API**       | REST + GraphQL (Apollo Server) |
+| **Database**  | PostgreSQL (Neon)              |
+| **ORM**       | Drizzle ORM                    |
+| **Caching**   | Redis (optional)               |
+| **Job Queue** | BullMQ                         |
+| **Real-time** | WebSockets (ws)                |
+| **AI**        | OpenAI GPT-4o-mini             |
+| **Testing**   | Vitest                         |
 
 ## Prerequisites
 
@@ -122,6 +125,7 @@ Before you begin, ensure you have the following installed:
 - **Redis** (optional, for caching and job queues)
 
 You will also need:
+
 - An **OpenAI API Key** for AI-powered debates
 
 ## Installation
@@ -177,14 +181,14 @@ The application will be available at `http://localhost:5000`
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `DATABASE_URL` | No | - | PostgreSQL connection string. Falls back to in-memory storage if not set. |
-| `OPENAI_API_KEY` | **Yes** | - | Your OpenAI API key for AI debate generation. |
-| `REDIS_URL` | No | - | Redis connection string for caching and job queues. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | - | OpenTelemetry collector endpoint for tracing. |
-| `LOG_LEVEL` | No | `info` | Logging level: `debug`, `info`, `warn`, `error` |
-| `NODE_ENV` | No | `development` | Environment: `development` or `production` |
+| Variable                      | Required | Default       | Description                                                               |
+| ----------------------------- | -------- | ------------- | ------------------------------------------------------------------------- |
+| `DATABASE_URL`                | No       | -             | PostgreSQL connection string. Falls back to in-memory storage if not set. |
+| `OPENAI_API_KEY`              | **Yes**  | -             | Your OpenAI API key for AI debate generation.                             |
+| `REDIS_URL`                   | No       | -             | Redis connection string for caching and job queues.                       |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No       | -             | OpenTelemetry collector endpoint for tracing.                             |
+| `LOG_LEVEL`                   | No       | `info`        | Logging level: `debug`, `info`, `warn`, `error`                           |
+| `NODE_ENV`                    | No       | `development` | Environment: `development` or `production`                                |
 
 ### Example `.env` file
 
@@ -300,39 +304,39 @@ debatrix/
 
 ### Debates
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/debates` | List all debates (supports `?search=`, `?status=`, `?sortBy=`) |
-| `GET` | `/api/debates/:id` | Get debate details |
-| `POST` | `/api/debates` | Create a new debate |
-| `GET` | `/api/debates/:id/arguments` | Get all arguments for a debate |
-| `POST` | `/api/debates/:id/pause` | Pause an active debate |
-| `POST` | `/api/debates/:id/resume` | Resume a paused debate |
-| `POST` | `/api/debates/:id/skip` | Skip to final judgment |
+| Method | Endpoint                     | Description                                                    |
+| ------ | ---------------------------- | -------------------------------------------------------------- |
+| `GET`  | `/api/debates`               | List all debates (supports `?search=`, `?status=`, `?sortBy=`) |
+| `GET`  | `/api/debates/:id`           | Get debate details                                             |
+| `POST` | `/api/debates`               | Create a new debate                                            |
+| `GET`  | `/api/debates/:id/arguments` | Get all arguments for a debate                                 |
+| `POST` | `/api/debates/:id/pause`     | Pause an active debate                                         |
+| `POST` | `/api/debates/:id/resume`    | Resume a paused debate                                         |
+| `POST` | `/api/debates/:id/skip`      | Skip to final judgment                                         |
 
 ### Personas
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/personas` | List all personas with stats |
-| `GET` | `/api/personas/:id` | Get persona details |
-| `POST` | `/api/personas` | Create a new persona |
-| `PATCH` | `/api/personas/:id` | Update a persona |
+| Method   | Endpoint            | Description                               |
+| -------- | ------------------- | ----------------------------------------- |
+| `GET`    | `/api/personas`     | List all personas with stats              |
+| `GET`    | `/api/personas/:id` | Get persona details                       |
+| `POST`   | `/api/personas`     | Create a new persona                      |
+| `PATCH`  | `/api/personas/:id` | Update a persona                          |
 | `DELETE` | `/api/personas/:id` | Delete a persona (if not used in debates) |
 
 ### Voting
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
+| Method | Endpoint     | Description         |
+| ------ | ------------ | ------------------- |
 | `POST` | `/api/votes` | Vote on an argument |
 
 ### Analytics
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/analytics/stats` | Platform statistics |
-| `GET` | `/api/analytics/trending` | Trending debate topics |
-| `GET` | `/api/analytics/activity` | Recent debate activity |
+| Method | Endpoint                  | Description            |
+| ------ | ------------------------- | ---------------------- |
+| `GET`  | `/api/analytics/stats`    | Platform statistics    |
+| `GET`  | `/api/analytics/trending` | Trending debate topics |
+| `GET`  | `/api/analytics/activity` | Recent debate activity |
 
 ## GraphQL API
 
@@ -349,8 +353,14 @@ query {
     status
     currentRound
     totalRounds
-    personaA { name tone }
-    personaB { name tone }
+    personaA {
+      name
+      tone
+    }
+    personaB {
+      name
+      tone
+    }
   }
 }
 
@@ -360,7 +370,9 @@ query {
     topic
     arguments {
       content
-      persona { name }
+      persona {
+        name
+      }
       voteCount
     }
   }
@@ -382,11 +394,13 @@ query {
 ```graphql
 # Create a new persona
 mutation {
-  createPersona(input: {
-    name: "Professor Logic"
-    tone: "Academic and methodical"
-    bias: "Values empirical evidence above all"
-  }) {
+  createPersona(
+    input: {
+      name: "Professor Logic"
+      tone: "Academic and methodical"
+      bias: "Values empirical evidence above all"
+    }
+  ) {
     id
     name
   }
@@ -399,10 +413,10 @@ Connect to `/ws` for real-time updates. Send a join message after connecting:
 
 ```javascript
 // Connect to WebSocket
-const ws = new WebSocket('ws://localhost:5000/ws');
+const ws = new WebSocket("ws://localhost:5000/ws");
 
 // Join a debate room
-ws.send(JSON.stringify({ type: 'join', debateId: 'debate-id' }));
+ws.send(JSON.stringify({ type: "join", debateId: "debate-id" }));
 
 // Listen for events
 ws.onmessage = (event) => {
@@ -413,13 +427,13 @@ ws.onmessage = (event) => {
 
 ### Event Types
 
-| Event | Description |
-|-------|-------------|
-| `typing` | A persona is generating an argument |
-| `argument` | New argument posted |
-| `status` | Debate status changed (paused/resumed) |
+| Event      | Description                            |
+| ---------- | -------------------------------------- |
+| `typing`   | A persona is generating an argument    |
+| `argument` | New argument posted                    |
+| `status`   | Debate status changed (paused/resumed) |
 | `judgment` | Debate completed with winner announced |
-| `error` | Error occurred during debate |
+| `error`    | Error occurred during debate           |
 
 ## Testing
 

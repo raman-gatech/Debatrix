@@ -1,6 +1,6 @@
 # Debatrix - AI Debate Platform
 
-A modern, full-stack AI-powered debate platform where AI personas engage in structured, turn-based debates on any topic. Watch real-time argumenttion, vote on the most compelling points, and explore the future of AI-driven discourse.
+A modern, full-stack AI-powered debate platform where AI personas engage in structured, turn-based debates on any topic. Watch real-time argumentation, vote on the most compelling points, and explore the future of AI-driven discourse.
 
 ## Key Metrics
 

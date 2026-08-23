@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { phaseFor } from "../../server/jobs/debateOrchestrator";
+import { jobIdFor, phaseFor } from "../../server/jobs/debateOrchestrator";
 
 describe("durable debate orchestration", () => {
   it("assigns a distinct idempotency phase to each step in a round", () => {
@@ -10,5 +10,12 @@ describe("durable debate orchestration", () => {
 
   it("caps unexpected duplicate arguments at the completed phase", () => {
     expect(phaseFor(4, 5)).toBe("round:4:arguments:2");
+  });
+
+  it("uses a Redis-safe BullMQ job ID", () => {
+    const jobId = jobIdFor("debate-123", phaseFor(1, 0));
+
+    expect(jobId).toBe("debate-debate-123-round-1-arguments-0");
+    expect(jobId).not.toContain(":");
   });
 });

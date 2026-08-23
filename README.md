@@ -88,7 +88,7 @@ Open `http://localhost:5000`. Configure the GitHub OAuth callback URL as `http:/
 | ------------- | ------------------------------ |
 | **Runtime**   | Node.js 20+                    |
 | **Language**  | TypeScript                     |
-| **Frontend**  | React 18 + Vite                |
+| **Frontend**  | React 19 + Vite                |
 | **Styling**   | Tailwind CSS + shadcn/ui       |
 | **Backend**   | Express.js                     |
 | **API**       | REST + GraphQL (Apollo Server) |
@@ -119,7 +119,7 @@ You will also need:
 
 ```bash
 git clone https://github.com/raman-gatech/Debatrix.git
-cd Debatrix/final_debatrix
+cd Debatrix
 ```
 
 ### 2. Install Dependencies
@@ -487,7 +487,7 @@ tests/
 
 ### Frontend Architecture
 
-- **React 18** with functional components and hooks
+- **React 19** with functional components and hooks
 - **TanStack Query** for server state management with automatic caching
 - **Wouter** for lightweight client-side routing
 - **shadcn/ui** components built on Radix UI primitives

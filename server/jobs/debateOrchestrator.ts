@@ -17,6 +17,13 @@ export function phaseFor(round: number, argumentCount: number): string {
   return `round:${round}:arguments:${Math.min(argumentCount, 2)}`;
 }
 
+// BullMQ reserves `:` for its internal Redis key structure, so application
+// supplied job IDs must not contain it. Keep the human-readable phase format
+// for state comparisons while using a Redis-safe representation for the job.
+export function jobIdFor(debateId: string, phase: string): string {
+  return `debate-${debateId}-${phase.replaceAll(":", "-")}`;
+}
+
 async function getCurrentPhase(debateId: string): Promise<string | null> {
   const debate = await storage.getDebate(debateId);
   if (!debate || debate.status !== "active") return null;
@@ -71,7 +78,7 @@ export async function queueDebateStep(debateId: string, delay = 0): Promise<void
 
   await addJob(DEBATE_ORCHESTRATION_QUEUE, "advance-debate", data, {
     delay,
-    jobId: `debate:${debateId}:${phase}`,
+    jobId: jobIdFor(debateId, phase),
     // Free completed phase IDs so a debate paused before work begins can be
     // resumed at the same state without being blocked by an old job record.
     removeOnComplete: true,

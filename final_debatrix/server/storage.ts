@@ -13,7 +13,13 @@ import {
   type InsertVote,
 } from "@shared/schema";
 import { db, hasDatabase } from "./db";
-import { eq, desc, and } from "drizzle-orm";
+import { and, count, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { createLogger } from "./lib/logger";
+
+const personaA = alias(personas, "persona_a");
+const personaB = alias(personas, "persona_b");
+const logger = createLogger("storage");
 
 export interface IStorage {
   // Personas
@@ -50,12 +56,13 @@ export interface IStorage {
       persona: Persona;
     })[]
   >;
+  getArgumentCountsByDebate(debateIds: string[]): Promise<Record<string, number>>;
 
   // Votes
   createVote(vote: InsertVote): Promise<Vote>;
   getVotesByDebate(debateId: string): Promise<Vote[]>;
   getAllVotes(): Promise<Vote[]>;
-  hasVoted(argumentId: string, fingerprint: string): Promise<boolean>;
+  hasVoted(argumentId: string, githubId: string): Promise<boolean>;
   
   // Judgment
   setDebateWinner(debateId: string, winnerId: string, judgmentSummary: string): Promise<void>;
@@ -91,6 +98,7 @@ export class MemStorage implements IStorage {
     const persona: Persona = {
       id: generateId(),
       ...insertPersona,
+      createdByGithubId: insertPersona.createdByGithubId ?? null,
       createdAt: new Date(),
     };
     this.personas.set(persona.id, persona);
@@ -134,6 +142,7 @@ export class MemStorage implements IStorage {
       currentRound: 1,
       winnerId: insertDebate.winnerId ?? null,
       judgmentSummary: insertDebate.judgmentSummary ?? null,
+      createdByGithubId: insertDebate.createdByGithubId ?? null,
       createdAt: new Date(),
     };
     this.debates.set(debate.id, debate);
@@ -235,10 +244,22 @@ export class MemStorage implements IStorage {
     return argumentsWithPersonas;
   }
 
+  async getArgumentCountsByDebate(debateIds: string[]): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    const ids = new Set(debateIds);
+    for (const argument of Array.from(this.arguments.values())) {
+      if (ids.has(argument.debateId)) {
+        counts[argument.debateId] = (counts[argument.debateId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }
+
   async createVote(insertVote: InsertVote): Promise<Vote> {
     const vote: Vote = {
       id: generateId(),
       ...insertVote,
+      voterGithubId: insertVote.voterGithubId ?? null,
       createdAt: new Date(),
     };
     this.votes.set(vote.id, vote);
@@ -255,11 +276,11 @@ export class MemStorage implements IStorage {
     return Array.from(this.votes.values());
   }
 
-  async hasVoted(argumentId: string, fingerprint: string): Promise<boolean> {
+  async hasVoted(argumentId: string, githubId: string): Promise<boolean> {
     return Array.from(this.votes.values()).some(
       (vote) =>
         vote.argumentId === argumentId &&
-        vote.voterFingerprint === fingerprint
+        vote.voterGithubId === githubId
     );
   }
 
@@ -392,22 +413,18 @@ export class DatabaseStorage implements IStorage {
     | undefined
   > {
     const [result] = await db!
-      .select()
+      .select({ debate: debates, personaA, personaB })
       .from(debates)
-      .where(eq(debates.id, id))
-      .leftJoin(personas, eq(debates.personaAId, personas.id));
+      .innerJoin(personaA, eq(debates.personaAId, personaA.id))
+      .innerJoin(personaB, eq(debates.personaBId, personaB.id))
+      .where(eq(debates.id, id));
 
     if (!result) return undefined;
 
-    const [personaB] = await db!
-      .select()
-      .from(personas)
-      .where(eq(personas.id, result.debates.personaBId));
-
     return {
-      ...result.debates,
-      personaA: result.personas!,
-      personaB: personaB,
+      ...result.debate,
+      personaA: result.personaA,
+      personaB: result.personaB,
     };
   }
 
@@ -418,31 +435,17 @@ export class DatabaseStorage implements IStorage {
     })[]
   > {
     const results = await db!
-      .select()
+      .select({ debate: debates, personaA, personaB })
       .from(debates)
+      .innerJoin(personaA, eq(debates.personaAId, personaA.id))
+      .innerJoin(personaB, eq(debates.personaBId, personaB.id))
       .orderBy(desc(debates.createdAt));
 
-    const debatesWithPersonas = await Promise.all(
-      results.map(async (debate) => {
-        const [personaA] = await db!
-          .select()
-          .from(personas)
-          .where(eq(personas.id, debate.personaAId));
-
-        const [personaB] = await db!
-          .select()
-          .from(personas)
-          .where(eq(personas.id, debate.personaBId));
-
-        return {
-          ...debate,
-          personaA,
-          personaB,
-        };
-      })
-    );
-
-    return debatesWithPersonas;
+    return results.map((result) => ({
+      ...result.debate,
+      personaA: result.personaA,
+      personaB: result.personaB,
+    }));
   }
 
   async updateDebate(
@@ -483,6 +486,18 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  async getArgumentCountsByDebate(debateIds: string[]): Promise<Record<string, number>> {
+    if (debateIds.length === 0) return {};
+
+    const rows = await db!
+      .select({ debateId: debateArguments.debateId, argumentCount: count(debateArguments.id) })
+      .from(debateArguments)
+      .where(inArray(debateArguments.debateId, debateIds))
+      .groupBy(debateArguments.debateId);
+
+    return Object.fromEntries(rows.map((row) => [row.debateId, row.argumentCount]));
+  }
+
   async createVote(insertVote: InsertVote): Promise<Vote> {
     const [vote] = await db!.insert(votes).values(insertVote).returning();
     return vote;
@@ -492,13 +507,13 @@ export class DatabaseStorage implements IStorage {
     return await db!.select().from(votes).where(eq(votes.debateId, debateId));
   }
 
-  async hasVoted(argumentId: string, fingerprint: string): Promise<boolean> {
+  async hasVoted(argumentId: string, githubId: string): Promise<boolean> {
     const [vote] = await db!
       .select()
       .from(votes)
       .where(and(
         eq(votes.argumentId, argumentId),
-        eq(votes.voterFingerprint, fingerprint)
+        eq(votes.voterGithubId, githubId)
       ))
       .limit(1);
 
@@ -528,18 +543,24 @@ export class DatabaseStorage implements IStorage {
     totalVotes: number;
     totalPersonas: number;
   }> {
-    const allDebates = await db!.select().from(debates);
-    const allArgs = await db!.select().from(debateArguments);
-    const allVotes = await db!.select().from(votes);
-    const allPersonas = await db!.select().from(personas);
-    
+    const [debateStats] = await db!
+      .select({
+        totalDebates: count(debates.id),
+        activeDebates: sql<number>`count(*) filter (where ${debates.status} in ('active', 'paused'))`.mapWith(Number),
+        completedDebates: sql<number>`count(*) filter (where ${debates.status} = 'completed')`.mapWith(Number),
+      })
+      .from(debates);
+    const [argumentStats] = await db!.select({ totalArguments: count(debateArguments.id) }).from(debateArguments);
+    const [voteStats] = await db!.select({ totalVotes: count(votes.id) }).from(votes);
+    const [personaStats] = await db!.select({ totalPersonas: count(personas.id) }).from(personas);
+
     return {
-      totalDebates: allDebates.length,
-      activeDebates: allDebates.filter(d => d.status === "active" || d.status === "paused").length,
-      completedDebates: allDebates.filter(d => d.status === "completed").length,
-      totalArguments: allArgs.length,
-      totalVotes: allVotes.length,
-      totalPersonas: allPersonas.length,
+      totalDebates: debateStats.totalDebates,
+      activeDebates: debateStats.activeDebates,
+      completedDebates: debateStats.completedDebates,
+      totalArguments: argumentStats.totalArguments,
+      totalVotes: voteStats.totalVotes,
+      totalPersonas: personaStats.totalPersonas,
     };
   }
 
@@ -549,24 +570,31 @@ export class DatabaseStorage implements IStorage {
     totalArguments: number;
     totalVotesReceived: number;
   }> {
-    const allDebates = await db!.select().from(debates);
-    const allArgs = await db!.select().from(debateArguments).where(eq(debateArguments.personaId, personaId));
-    const allVotes = await db!.select().from(votes);
-    
-    const personaDebates = allDebates.filter(
-      d => d.personaAId === personaId || d.personaBId === personaId
-    );
-    const personaArgIds = new Set(allArgs.map(a => a.id));
-    const personaVotes = allVotes.filter(v => personaArgIds.has(v.argumentId));
-    
+    const [debateStats] = await db!
+      .select({
+        totalDebates: count(debates.id),
+        wins: sql<number>`count(*) filter (where ${debates.winnerId} = ${personaId})`.mapWith(Number),
+      })
+      .from(debates)
+      .where(or(eq(debates.personaAId, personaId), eq(debates.personaBId, personaId)));
+    const [argumentStats] = await db!
+      .select({ totalArguments: count(debateArguments.id) })
+      .from(debateArguments)
+      .where(eq(debateArguments.personaId, personaId));
+    const [voteStats] = await db!
+      .select({ totalVotesReceived: count(votes.id) })
+      .from(votes)
+      .innerJoin(debateArguments, eq(votes.argumentId, debateArguments.id))
+      .where(eq(debateArguments.personaId, personaId));
+
     return {
-      totalDebates: personaDebates.length,
-      wins: personaDebates.filter(d => d.winnerId === personaId).length,
-      totalArguments: allArgs.length,
-      totalVotesReceived: personaVotes.length,
+      totalDebates: debateStats.totalDebates,
+      wins: debateStats.wins,
+      totalArguments: argumentStats.totalArguments,
+      totalVotesReceived: voteStats.totalVotesReceived,
     };
   }
 }
 
 export const storage = hasDatabase ? new DatabaseStorage() : new MemStorage();
-console.log(`[storage] Using ${hasDatabase ? 'database' : 'in-memory'} storage`);
+logger.info({ backend: hasDatabase ? "database" : "in-memory" }, "Storage initialized");

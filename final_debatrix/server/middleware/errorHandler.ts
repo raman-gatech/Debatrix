@@ -47,6 +47,16 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ): void {
+  if ((err as { type?: string }).type === "entity.too.large") {
+    res.status(413).json({ error: "Request body is too large", code: "PAYLOAD_TOO_LARGE" });
+    return;
+  }
+
+  if (err instanceof SyntaxError && "body" in err) {
+    res.status(400).json({ error: "Malformed JSON request body", code: "INVALID_JSON" });
+    return;
+  }
+
   if (err instanceof ZodError) {
     logger.warn({ path: req.path, errors: err.errors }, "Validation error");
     res.status(400).json({

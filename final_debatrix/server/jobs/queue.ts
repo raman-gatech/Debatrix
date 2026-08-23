@@ -14,6 +14,7 @@ interface QueueConfig {
   name: string;
   processor: (job: Job<any>) => Promise<any>;
   concurrency?: number;
+  onExhausted?: (job: Job<any>, error: Error) => Promise<void>;
 }
 
 const queues: Map<string, Queue> = new Map();
@@ -52,7 +53,21 @@ export function createQueue(config: QueueConfig): Queue | null {
   });
 
   worker.on("failed", (job, err) => {
-    logger.error({ jobId: job?.id, queue: config.name, error: err.message }, "Job failed");
+    const attempts = job?.opts.attempts ?? 1;
+    const exhausted = job ? isFinalAttempt(job.attemptsMade, attempts) : true;
+    logger.error(
+      { jobId: job?.id, queue: config.name, error: err.message, attemptsMade: job?.attemptsMade, attempts, exhausted },
+      exhausted ? "Job exhausted all retry attempts" : "Job attempt failed; retry scheduled",
+    );
+
+    if (job && exhausted && config.onExhausted) {
+      void config.onExhausted(job, err).catch((callbackError: unknown) => {
+        logger.error(
+          { jobId: job.id, queue: config.name, error: callbackError instanceof Error ? callbackError.message : String(callbackError) },
+          "Failed to handle exhausted job",
+        );
+      });
+    }
   });
 
   worker.on("error", (err) => {
@@ -78,6 +93,8 @@ export async function addJob(
   options?: {
     delay?: number;
     priority?: number;
+    jobId?: string;
+    removeOnComplete?: boolean | number;
   }
 ): Promise<Job | null> {
   const queue = queues.get(queueName);
@@ -89,6 +106,8 @@ export async function addJob(
   const job = await queue.add(name, data, {
     delay: options?.delay,
     priority: options?.priority,
+    jobId: options?.jobId,
+    removeOnComplete: options?.removeOnComplete,
   });
 
   logger.debug({ jobId: job.id, queue: queueName, name }, "Job added");
@@ -111,6 +130,10 @@ export async function shutdownQueues(): Promise<void> {
 
   await Promise.all(shutdownPromises);
   logger.info("All queues shut down");
+}
+
+export function isFinalAttempt(attemptsMade: number, configuredAttempts: number): boolean {
+  return attemptsMade >= Math.max(1, configuredAttempts);
 }
 
 export { Queue, Worker, Job };

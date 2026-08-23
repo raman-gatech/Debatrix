@@ -2,58 +2,17 @@
 
 A modern, full-stack AI-powered debate platform where AI personas engage in structured, turn-based debates on any topic. Watch real-time argumentation, vote on the most compelling points, and explore the future of AI-driven discourse.
 
-## Key Metrics
+## Production posture
 
-> **Resume-Ready Performance & Testing Highlights**
-
-| Metric                  | Value                              |
-| ----------------------- | ---------------------------------- |
-| **Test Coverage**       | 63 unit tests across 3 test suites |
-| **Test Pass Rate**      | 100% (63/63 tests passing)         |
-| **Test Execution Time** | <2 seconds total                   |
-| **Codebase Size**       | 50+ TypeScript files               |
-| **API Endpoints**       | 15+ REST endpoints + GraphQL       |
-| **Real-time Events**    | 5 WebSocket event types            |
-
-### Performance Optimizations
-
-- **Redis Caching**: API response caching with 60-300s TTL, reducing database queries by up to 80%
-- **Rate Limiting**: Configurable request throttling (100 req/min default) with Redis-backed or in-memory storage
-- **Connection Pooling**: Efficient database connections via Neon serverless PostgreSQL
-- **Lazy Loading**: Redis connections established on-demand to minimize startup time
-- **Background Jobs**: BullMQ-powered async processing for AI generation, preventing request blocking
-- **Graceful Degradation**: Automatic fallback to in-memory storage when Redis/PostgreSQL unavailable
-
-### Observability & Monitoring
-
-- **Distributed Tracing**: OpenTelemetry integration for end-to-end request tracing
-- **Structured Logging**: Pino-based JSON logging with module-specific child loggers
-- **Custom Metrics**: Span-based metric recording for performance monitoring
-- **Health Indicators**: Rate limit headers (`X-RateLimit-Remaining`) on all responses
-
-### Testing Strategy
-
-| Test Type            | Coverage                                                 |
-| -------------------- | -------------------------------------------------------- |
-| **Storage Layer**    | CRUD operations, data integrity, relationship handling   |
-| **API Validation**   | Input validation, field requirements, type checking      |
-| **Business Logic**   | State transitions, analytics calculations, deduplication |
-| **Search/Filter**    | Query parameters, sorting, filtering algorithms          |
-| **Rate Limiting**    | Request counting, window expiration, limit enforcement   |
-| **WebSocket Events** | Message parsing, event type handling                     |
-
-### Architecture Highlights (FAANG-Level)
-
-- **Clean Architecture**: Separation of concerns with dedicated layers (routes, storage, services)
-- **Type Safety**: End-to-end TypeScript with Zod schema validation
-- **Dual API**: REST + GraphQL endpoints for flexible data fetching
-- **Event-Driven**: WebSocket pub/sub for real-time updates
-- **Resilient Design**: Graceful fallbacks for all external dependencies
-- **Horizontal Scalability**: Stateless design with Redis for shared state
+- Production requires PostgreSQL, Redis, GitHub OAuth, a session secret, and an OpenAI API key; the service fails fast when any is absent.
+- Debate steps use durable, idempotent BullMQ jobs. Exhausted retries leave a recoverable error state rather than an indefinitely active debate.
+- Database migrations are ordered, transactional, tracked in `schema_migrations`, and protected by a PostgreSQL advisory lock.
+- CI typechecks, runs the test suite, builds the client and server, audits production dependencies, builds the Docker image, and starts it against PostgreSQL and Redis until `/readyz` succeeds.
+- Development may use in-memory storage and synchronous debate scheduling when external services are intentionally absent. Those fallbacks are disabled in production.
 
 ## Table of Contents
 
-- [Key Metrics](#key-metrics)
+- [Production posture](#production-posture)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
@@ -66,6 +25,7 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 - [WebSocket Events](#websocket-events)
 - [Testing](#testing)
 - [Architecture Overview](#architecture-overview)
+- [Production Deployment](#production-deployment)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -91,7 +51,7 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 ### Technical Features
 
 - **GraphQL API**: Flexible data fetching alongside REST endpoints
-- **Redis Caching**: Optional caching layer for improved performance
+- **Redis Caching**: Cache invalidation and distributed rate limiting
 - **Background Jobs**: BullMQ-powered job queue for AI generation
 - **Rate Limiting**: Protection against API abuse
 - **Structured Logging**: Pino-based logging with module-specific loggers
@@ -107,9 +67,9 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 | **Styling**   | Tailwind CSS + shadcn/ui       |
 | **Backend**   | Express.js                     |
 | **API**       | REST + GraphQL (Apollo Server) |
-| **Database**  | PostgreSQL (Neon)              |
+| **Database**  | PostgreSQL                     |
 | **ORM**       | Drizzle ORM                    |
-| **Caching**   | Redis (optional)               |
+| **Caching**   | Redis (required in production) |
 | **Job Queue** | BullMQ                         |
 | **Real-time** | WebSockets (ws)                |
 | **AI**        | OpenAI GPT-4o-mini             |
@@ -119,14 +79,14 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 
 Before you begin, ensure you have the following installed:
 
-- **Node.js** (v20.0.0 or higher)
+- **Node.js** (20.19 through 24.x)
 - **npm** (v10.0.0 or higher)
 - **PostgreSQL** (v14 or higher) - or use a cloud provider like Neon
-- **Redis** (optional, for caching and job queues)
+- **Redis** (required in production for caching, rate limits, and job queues)
 
 You will also need:
 
-- An **OpenAI API Key** for AI-powered debates
+- An **OpenAI API Key** and a **GitHub OAuth application** for production
 
 ## Installation
 
@@ -162,13 +122,13 @@ If using a local PostgreSQL database:
 createdb debatrix
 
 # Run database migrations
-npm run db:push
+npm run db:migrate
 ```
 
 If using Neon or another cloud provider, just set the `DATABASE_URL` and run:
 
 ```bash
-npm run db:push
+npm run db:migrate
 ```
 
 ### 5. Start the Application
@@ -183,28 +143,42 @@ The application will be available at `http://localhost:5000`
 
 | Variable                      | Required | Default       | Description                                                               |
 | ----------------------------- | -------- | ------------- | ------------------------------------------------------------------------- |
-| `DATABASE_URL`                | No       | -             | PostgreSQL connection string. Falls back to in-memory storage if not set. |
-| `OPENAI_API_KEY`              | **Yes**  | -             | Your OpenAI API key for AI debate generation.                             |
-| `REDIS_URL`                   | No       | -             | Redis connection string for caching and job queues.                       |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | No       | -             | OpenTelemetry collector endpoint for tracing.                             |
-| `LOG_LEVEL`                   | No       | `info`        | Logging level: `debug`, `info`, `warn`, `error`                           |
-| `NODE_ENV`                    | No       | `development` | Environment: `development` or `production`                                |
+| `APP_ORIGIN`                  | **Yes in production** | - | Exact public HTTPS origin, for example `https://debatrix.example`. |
+| `SESSION_SECRET`              | **Yes in production** | - | Random secret with at least 32 characters for signed sessions. |
+| `GITHUB_CLIENT_ID`            | **Yes in production** | - | GitHub OAuth application client ID. |
+| `GITHUB_CLIENT_SECRET`        | **Yes in production** | - | GitHub OAuth application client secret. |
+| `DATABASE_URL`                | **Yes in production** | - | PostgreSQL connection string; use `sslmode=require` when required by the provider. |
+| `REDIS_URL`                   | **Yes in production** | - | Redis connection string for durable jobs and distributed rate limits. |
+| `OPENAI_API_KEY`              | **Yes in production** | - | OpenAI API key for debate generation and judging. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | - | OpenTelemetry collector endpoint for tracing. |
+| `LOG_LEVEL`                   | No | `info` | Logging level: `debug`, `info`, `warn`, `error`. |
+| `NODE_ENV`                    | No | `development` | Environment: `development` or `production`. |
 
 ### Example `.env` file
 
 ```env
-# Required
+# Required in production
+APP_ORIGIN=https://debatrix.example
+SESSION_SECRET=replace-with-a-random-secret-of-at-least-32-characters
+GITHUB_CLIENT_ID=your-github-oauth-client-id
+GITHUB_CLIENT_SECRET=your-github-oauth-client-secret
+DATABASE_URL=postgresql://user:password@host:5432/debatrix?sslmode=require
+REDIS_URL=redis://host:6379
 OPENAI_API_KEY=sk-your-openai-api-key-here
-
-# Database (optional - uses in-memory if not set)
-DATABASE_URL=postgresql://user:password@localhost:5432/debatrix
-
-# Redis (optional - enables caching and background jobs)
-REDIS_URL=redis://localhost:6379
 
 # Logging
 LOG_LEVEL=info
 ```
+
+## Production Deployment
+
+The production service requires PostgreSQL, Redis, GitHub OAuth, and an OpenAI API key. Build the deployment image with:
+
+```bash
+docker build -t debatrix:latest .
+```
+
+Use `/healthz` for liveness and `/readyz` for PostgreSQL/Redis readiness checks. The required environment variables, deployment procedure, and rollback steps are in [docs/production-runbook.md](docs/production-runbook.md).
 
 ## Running the Application
 
@@ -229,8 +203,8 @@ npm start
 ### Database Commands
 
 ```bash
-# Push schema changes to database
-npm run db:push
+# Apply tracked database migrations
+npm run db:migrate
 
 # Open Drizzle Studio (database GUI)
 npm run db:studio

@@ -1,9 +1,6 @@
-import { Pool, neonConfig } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
-import ws from "ws";
+import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
-
-neonConfig.webSocketConstructor = ws;
 
 export const hasDatabase = !!process.env.DATABASE_URL;
 
@@ -16,3 +13,13 @@ if (hasDatabase) {
 }
 
 export { pool, db };
+
+export async function checkDatabaseConnection(): Promise<boolean> {
+  if (!pool) return false;
+  await pool.query("SELECT 1");
+  return true;
+}
+
+export async function closeDatabase(): Promise<void> {
+  await pool?.end();
+}

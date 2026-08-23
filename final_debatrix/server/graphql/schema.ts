@@ -26,7 +26,6 @@ export const typeDefs = gql`
     id: ID!
     argumentId: ID!
     debateId: ID!
-    voterFingerprint: String!
     createdAt: DateTime!
   }
 
@@ -49,6 +48,7 @@ export const typeDefs = gql`
 
   enum DebateStatus {
     active
+    paused
     completed
     error
   }
@@ -73,7 +73,6 @@ export const typeDefs = gql`
   input VoteInput {
     argumentId: ID!
     debateId: ID!
-    voterFingerprint: String!
   }
 
   type CreateDebatePayload {

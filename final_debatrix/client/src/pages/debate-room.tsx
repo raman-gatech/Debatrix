@@ -45,16 +45,21 @@ export default function DebateRoom() {
     refetchInterval: 2000,
   });
 
+  const { data: auth } = useQuery<{ user: { githubId: string } | null }>({
+    queryKey: ["auth", "me"],
+    queryFn: async () => {
+      const response = await fetch("/api/auth/me", { credentials: "include" });
+      if (response.status === 401) return { user: null };
+      if (!response.ok) throw new Error("Unable to load sign-in status");
+      return response.json();
+    },
+  });
+
   const voteMutation = useMutation({
     mutationFn: async (argumentId: string) => {
-      const fingerprint = localStorage.getItem("voterFingerprint") || 
-        Math.random().toString(36).substring(7);
-      localStorage.setItem("voterFingerprint", fingerprint);
-
       const response = await apiRequest("POST", "/api/votes", {
         argumentId,
         debateId,
-        voterFingerprint: fingerprint,
       });
       return await response.json();
     },
@@ -204,6 +209,7 @@ export default function DebateRoom() {
   }
 
   const debateArgs = argumentsData?.debateArguments || [];
+  const canControlDebate = auth?.user?.githubId === debate.createdByGithubId;
 
   return (
     <div className="min-h-screen">
@@ -224,12 +230,15 @@ export default function DebateRoom() {
                 {debate.status === "paused" && (
                   <Badge variant="secondary">Paused</Badge>
                 )}
+                {debate.status === "error" && (
+                  <Badge variant="destructive">Needs retry</Badge>
+                )}
               </div>
               <p className="text-sm text-muted-foreground">
                 Round {debate.currentRound} of {debate.totalRounds}
               </p>
             </div>
-            {(debate.status === "active" || debate.status === "paused") && (
+            {canControlDebate && (debate.status === "active" || debate.status === "paused" || debate.status === "error") && (
               <div className="flex items-center gap-2">
                 {debate.status === "active" ? (
                   <Button
@@ -251,7 +260,7 @@ export default function DebateRoom() {
                     data-testid="button-resume"
                   >
                     <Play className="w-4 h-4 mr-1" />
-                    Resume
+                    {debate.status === "error" ? "Retry" : "Resume"}
                   </Button>
                 )}
                 <Button
@@ -297,7 +306,13 @@ export default function DebateRoom() {
                             hasVoted: votedArguments.has(argument.id),
                           }}
                           side={side}
-                          onVote={(id) => voteMutation.mutate(id)}
+                          onVote={(id) => {
+                            if (!auth?.user) {
+                              window.location.assign("/api/auth/github");
+                              return;
+                            }
+                            voteMutation.mutate(id);
+                          }}
                           isVoting={voteMutation.isPending}
                         />
                       </div>

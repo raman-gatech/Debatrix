@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, integer, jsonb, boolean } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
 
@@ -9,6 +8,7 @@ export const personas = pgTable("personas", {
   name: text("name").notNull(),
   tone: text("tone").notNull(),
   bias: text("bias").notNull(),
+  createdByGithubId: text("created_by_github_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -22,6 +22,7 @@ export const debates = pgTable("debates", {
   currentRound: integer("current_round").notNull().default(1),
   winnerId: varchar("winner_id").references(() => personas.id),
   judgmentSummary: text("judgment_summary"),
+  createdByGithubId: text("created_by_github_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -39,6 +40,7 @@ export const votes = pgTable("votes", {
   argumentId: varchar("argument_id").notNull().references(() => debateArguments.id),
   debateId: varchar("debate_id").notNull().references(() => debates.id),
   voterFingerprint: text("voter_fingerprint").notNull(),
+  voterGithubId: text("voter_github_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -86,26 +88,39 @@ export const votesRelations = relations(votes, ({ one }) => ({
   }),
 }));
 
-export const insertPersonaSchema = createInsertSchema(personas).omit({
-  id: true,
-  createdAt: true,
+// Keep these schemas on Zod v3 because the client form resolver uses it. API
+// handlers apply stricter, request-specific validation in server/middleware.
+const optionalGithubId = z.string().trim().min(1).max(64).nullable().optional();
+
+export const insertPersonaSchema = z.object({
+  name: z.string(),
+  tone: z.string(),
+  bias: z.string(),
+  createdByGithubId: optionalGithubId,
 });
 
-export const insertDebateSchema = createInsertSchema(debates).omit({
-  id: true,
-  createdAt: true,
-  status: true,
-  currentRound: true,
+export const insertDebateSchema = z.object({
+  topic: z.string(),
+  personaAId: z.string(),
+  personaBId: z.string(),
+  totalRounds: z.number().int().optional(),
+  winnerId: z.string().nullable().optional(),
+  judgmentSummary: z.string().nullable().optional(),
+  createdByGithubId: optionalGithubId,
 });
 
-export const insertArgumentSchema = createInsertSchema(debateArguments).omit({
-  id: true,
-  createdAt: true,
+export const insertArgumentSchema = z.object({
+  debateId: z.string(),
+  personaId: z.string(),
+  content: z.string(),
+  roundNumber: z.number().int(),
 });
 
-export const insertVoteSchema = createInsertSchema(votes).omit({
-  id: true,
-  createdAt: true,
+export const insertVoteSchema = z.object({
+  argumentId: z.string(),
+  debateId: z.string(),
+  voterFingerprint: z.string(),
+  voterGithubId: optionalGithubId,
 });
 
 export type Persona = typeof personas.$inferSelect;

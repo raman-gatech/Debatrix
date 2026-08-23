@@ -1,4 +1,25 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { requireUser } from "../../server/auth";
+
+describe("Authentication boundary", () => {
+  it("rejects a state-changing request without a signed-in user", () => {
+    const status = vi.fn().mockReturnThis();
+    const json = vi.fn();
+    const next = vi.fn();
+
+    requireUser({ session: {} } as any, { status, json } as any, next);
+
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ code: "UNAUTHENTICATED" }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("allows a signed-in user through", () => {
+    const next = vi.fn();
+    requireUser({ session: { user: { githubId: "1", login: "raman", displayName: null, avatarUrl: null } } } as any, {} as any, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+});
 
 describe("API Validation", () => {
   describe("Persona Validation", () => {
@@ -58,19 +79,16 @@ describe("API Validation", () => {
       const validVote = {
         argumentId: "arg-1",
         debateId: "debate-1",
-        voterFingerprint: "fingerprint-123"
       };
       expect(validVote.argumentId).toBeDefined();
     });
 
-    it("should require voterFingerprint", () => {
+    it("should not accept a client-supplied voter identity", () => {
       const validVote = {
         argumentId: "arg-1",
         debateId: "debate-1",
-        voterFingerprint: "fingerprint-123"
       };
-      expect(validVote.voterFingerprint).toBeDefined();
-      expect(validVote.voterFingerprint.length).toBeGreaterThan(0);
+      expect(validVote).not.toHaveProperty("voterFingerprint");
     });
   });
 });

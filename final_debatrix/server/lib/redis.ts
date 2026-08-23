@@ -1,4 +1,7 @@
 import Redis from "ioredis";
+import { createLogger } from "./logger";
+
+const logger = createLogger("redis");
 
 let redis: Redis | null = null;
 let subscriber: Redis | null = null;
@@ -18,11 +21,11 @@ export function getRedis(): Redis | null {
     });
     
     redis.on("error", (err) => {
-      console.error("[Redis] Connection error:", err.message);
+      logger.warn({ error: err.message }, "Redis connection error");
     });
     
     redis.on("connect", () => {
-      console.log("[Redis] Connected successfully");
+      logger.info("Redis connected");
     });
   }
   
@@ -47,6 +50,20 @@ export function getSubscriber(): Redis | null {
 
 export const hasRedis = !!REDIS_URL;
 
+export async function checkRedisConnection(): Promise<boolean> {
+  const client = getRedis();
+  if (!client) return false;
+  await client.ping();
+  return true;
+}
+
+export async function closeRedis(): Promise<void> {
+  const clients = [redis, subscriber].filter((client): client is Redis => client !== null);
+  await Promise.all(clients.map((client) => client.quit()));
+  redis = null;
+  subscriber = null;
+}
+
 export class CacheService {
   private redis: Redis | null;
   private defaultTTL = 300;
@@ -62,7 +79,7 @@ export class CacheService {
       const data = await this.redis.get(key);
       return data ? JSON.parse(data) : null;
     } catch (error) {
-      console.error("[Cache] Get error:", error);
+      logger.warn({ error }, "Cache get failed");
       return null;
     }
   }
@@ -73,7 +90,7 @@ export class CacheService {
     try {
       await this.redis.setex(key, ttl, JSON.stringify(value));
     } catch (error) {
-      console.error("[Cache] Set error:", error);
+      logger.warn({ error }, "Cache set failed");
     }
   }
 
@@ -83,7 +100,7 @@ export class CacheService {
     try {
       await this.redis.del(key);
     } catch (error) {
-      console.error("[Cache] Delete error:", error);
+      logger.warn({ error }, "Cache delete failed");
     }
   }
 
@@ -91,12 +108,16 @@ export class CacheService {
     if (!this.redis) return;
     
     try {
-      const keys = await this.redis.keys(pattern);
-      if (keys.length > 0) {
-        await this.redis.del(...keys);
-      }
+      // KEYS blocks Redis while walking the whole keyspace. SCAN bounds each
+      // operation, which keeps cache invalidation safe as the cache grows.
+      let cursor = "0";
+      do {
+        const [nextCursor, keys] = await this.redis.scan(cursor, "MATCH", pattern, "COUNT", 100);
+        cursor = nextCursor;
+        if (keys.length > 0) await this.redis.del(...keys);
+      } while (cursor !== "0");
     } catch (error) {
-      console.error("[Cache] Pattern invalidation error:", error);
+      logger.warn({ error, pattern }, "Cache pattern invalidation failed");
     }
   }
 }
@@ -118,8 +139,12 @@ export class PubSubService {
     this.subscriber.on("message", (channel, message) => {
       const handlers = this.handlers.get(channel);
       if (handlers) {
-        const parsed = JSON.parse(message);
-        handlers.forEach((handler) => handler(parsed));
+        try {
+          const parsed = JSON.parse(message);
+          handlers.forEach((handler) => handler(parsed));
+        } catch (error) {
+          logger.warn({ error, channel }, "Discarded malformed pubsub message");
+        }
       }
     });
   }
@@ -130,7 +155,7 @@ export class PubSubService {
     try {
       await this.publisher.publish(channel, JSON.stringify(message));
     } catch (error) {
-      console.error("[PubSub] Publish error:", error);
+      logger.warn({ error, channel }, "Pubsub publish failed");
     }
   }
 
@@ -144,7 +169,7 @@ export class PubSubService {
     try {
       await this.subscriber.subscribe(channel);
     } catch (error) {
-      console.error("[PubSub] Subscribe error:", error);
+      logger.warn({ error, channel }, "Pubsub subscribe failed");
     }
   }
 
@@ -156,7 +181,7 @@ export class PubSubService {
     try {
       await this.subscriber.unsubscribe(channel);
     } catch (error) {
-      console.error("[PubSub] Unsubscribe error:", error);
+      logger.warn({ error, channel }, "Pubsub unsubscribe failed");
     }
   }
 }

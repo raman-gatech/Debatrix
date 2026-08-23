@@ -1,9 +1,22 @@
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { generateArgument, judgeDebate } from "./openai";
-import { cache } from "./lib/redis";
+import { cache, hasRedis, pubsub } from "./lib/redis";
+import { getAuthenticatedUser, requireUser } from "./auth";
+import { queueDebateStep } from "./jobs/debateOrchestrator";
+import { isUniqueViolation } from "./lib/databaseErrors";
+import { createLogger } from "./lib/logger";
+import { rateLimit } from "./middleware/rateLimit";
+import {
+  createDebateRequestSchema,
+  debateListQuerySchema,
+  personaRequestSchema,
+  resourceParamsSchema,
+  validate,
+  voteRequestSchema,
+  webSocketMessageSchema,
+} from "./middleware/validation";
 
 interface DebateClient {
   ws: WebSocket;
@@ -11,115 +24,16 @@ interface DebateClient {
 }
 
 const clients = new Map<WebSocket, DebateClient>();
+const subscribedDebateTopics = new Set<string>();
+const logger = createLogger("routes");
+const authenticatedRateLimitKey = (req: Parameters<ReturnType<typeof rateLimit>>[0]) => getAuthenticatedUser(req)?.githubId || "";
 
-async function runDebateOrchestrator(debateId: string, wss: WebSocketServer) {
-  const debate = await storage.getDebate(debateId);
-  if (!debate || (debate.status !== "active" && debate.status !== "paused")) return;
-  if (debate.status === "paused") return;
+function isOwnedBy(userId: string, resource: { createdByGithubId: string | null }): boolean {
+  return resource.createdByGithubId === userId;
+}
 
-  const existingArgs = await storage.getArgumentsByDebate(debateId);
-  const currentRound = debate.currentRound;
-  const roundArgs = existingArgs.filter((a) => a.roundNumber === currentRound);
-
-  let currentPersona = debate.personaA;
-  let currentPersonaId = debate.personaAId;
-
-  if (roundArgs.length === 1) {
-    currentPersona = debate.personaB;
-    currentPersonaId = debate.personaBId;
-  } else if (roundArgs.length >= 2) {
-    if (currentRound < debate.totalRounds) {
-      await storage.updateDebate(debateId, {
-        currentRound: currentRound + 1,
-      });
-      await cache.del(`debate:${debateId}`);
-      await cache.invalidatePattern("debates:*");
-      setTimeout(() => runDebateOrchestrator(debateId, wss), 2000);
-    } else {
-      const allArgs = await storage.getArgumentsByDebate(debateId);
-      const argsForJudge = allArgs.map(arg => ({
-        personaName: arg.persona.name,
-        personaId: arg.personaId,
-        content: arg.content,
-        roundNumber: arg.roundNumber
-      }));
-
-      try {
-        const judgment = await judgeDebate(
-          debate.topic,
-          debate.personaA.name,
-          debate.personaB.name,
-          argsForJudge
-        );
-
-        await storage.setDebateWinner(debateId, judgment.winnerId, judgment.judgmentSummary);
-
-        await cache.del(`debate:${debateId}:arguments`);
-        await cache.del(`debate:${debateId}`);
-        await cache.invalidatePattern("debates:*");
-
-        broadcastToDebate(wss, debateId, {
-          type: "judgment",
-          winnerId: judgment.winnerId,
-          judgmentSummary: judgment.judgmentSummary
-        });
-      } catch (error) {
-        console.error("Error judging debate:", error);
-        await storage.updateDebate(debateId, { status: "completed" });
-        await cache.del(`debate:${debateId}`);
-        await cache.invalidatePattern("debates:*");
-      }
-    }
-    return;
-  }
-
-  broadcastToDebate(wss, debateId, {
-    type: "typing",
-    personaName: currentPersona.name,
-  });
-
-  const previousArgs = existingArgs.map(
-    (arg) => `${arg.persona.name}: ${arg.content}`
-  );
-
-  try {
-    const argumentContent = await generateArgument(
-      debate.topic,
-      currentPersona.name,
-      currentPersona.tone,
-      currentPersona.bias,
-      previousArgs,
-      currentRound
-    );
-
-    const newArgument = await storage.createArgument({
-      debateId,
-      personaId: currentPersonaId,
-      content: argumentContent,
-      roundNumber: currentRound,
-    });
-
-    await cache.del(`debate:${debateId}:arguments`);
-    await cache.del(`debate:${debateId}`);
-    await cache.invalidatePattern("debates:*");
-
-    broadcastToDebate(wss, debateId, {
-      type: "argument",
-      argument: newArgument,
-    });
-
-    setTimeout(() => runDebateOrchestrator(debateId, wss), 3000);
-  } catch (error) {
-    console.error("Error generating argument:", error);
-    await storage.updateDebate(debateId, { status: "error" });
-    await cache.del(`debate:${debateId}`);
-    await cache.invalidatePattern("debates:*");
-    
-    broadcastToDebate(wss, debateId, {
-      type: "error",
-      message: error instanceof Error ? error.message : "Failed to generate argument",
-    });
-  }
+function sendForbidden(res: Response): void {
+  res.status(403).json({ error: "You do not have permission to modify this resource", code: "FORBIDDEN" });
 }
 
 function broadcastToDebate(
@@ -140,18 +54,26 @@ function broadcastToDebate(
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  const wss = new WebSocketServer({ server: httpServer, path: "/ws", maxPayload: 32 * 1024 });
+
+  const subscribeToDebate = async (debateId: string) => {
+    const topic = `debate:${debateId}`;
+    if (!hasRedis || subscribedDebateTopics.has(topic)) return;
+    subscribedDebateTopics.add(topic);
+    await pubsub.subscribe(topic, (event) => broadcastToDebate(wss, debateId, event));
+  };
 
   wss.on("connection", (ws) => {
     ws.on("message", (data) => {
       try {
-        const message = JSON.parse(data.toString());
+        const message = webSocketMessageSchema.safeParse(JSON.parse(data.toString()));
 
-        if (message.type === "join" && message.debateId) {
-          clients.set(ws, { ws, debateId: message.debateId });
+        if (message.success) {
+          clients.set(ws, { ws, debateId: message.data.debateId });
+          void subscribeToDebate(message.data.debateId);
         }
       } catch (error) {
-        console.error("WebSocket message error:", error);
+        logger.warn({ err: error }, "WebSocket message handling failed");
       }
     });
 
@@ -160,7 +82,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  app.get("/api/debates", async (req, res) => {
+  app.get("/api/debates", validate({ query: debateListQuerySchema }), async (req, res) => {
     try {
       const { search, status, sortBy } = req.query as { 
         search?: string; 
@@ -183,16 +105,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         debates = debates.filter(d => d.status === status);
       }
       
-      const debatesWithCounts = await Promise.all(
-        debates.map(async (debate) => {
-          const args = await storage.getArgumentsByDebate(debate.id);
-          return {
-            ...debate,
-            argumentCount: args.length,
-            spectatorCount: 0,
-          };
-        })
-      );
+      const argumentCounts = await storage.getArgumentCountsByDebate(debates.map((debate) => debate.id));
+      const debatesWithCounts = debates.map((debate) => ({
+        ...debate,
+        argumentCount: argumentCounts[debate.id] ?? 0,
+        spectatorCount: 0,
+      }));
 
       if (sortBy === "arguments") {
         debatesWithCounts.sort((a, b) => b.argumentCount - a.argumentCount);
@@ -208,7 +126,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/debates/:id", async (req, res) => {
+  app.get("/api/debates/:id", validate({ params: resourceParamsSchema }), async (req, res) => {
     try {
       const debate = await storage.getDebate(req.params.id);
       if (!debate) {
@@ -220,8 +138,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/debates", async (req, res) => {
+  app.post(
+    "/api/debates",
+    requireUser,
+    rateLimit({ windowMs: 15 * 60 * 1000, maxRequests: 3, keyPrefix: "debate-create", keyGenerator: authenticatedRateLimitKey }),
+    validate({ body: createDebateRequestSchema }),
+    async (req, res) => {
     try {
+      const user = getAuthenticatedUser(req)!;
       const {
         topic,
         personaAName,
@@ -237,12 +161,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: personaAName,
         tone: personaATone,
         bias: personaABias,
+        createdByGithubId: user.githubId,
       });
 
       const personaB = await storage.createPersona({
         name: personaBName,
         tone: personaBTone,
         bias: personaBBias,
+        createdByGithubId: user.githubId,
       });
 
       const debate = await storage.createDebate({
@@ -250,23 +176,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         personaAId: personaA.id,
         personaBId: personaB.id,
         totalRounds,
+        createdByGithubId: user.githubId,
       });
 
-      console.log("Created debate with ID:", debate.id);
+      logger.info({ debateId: debate.id }, "Debate created");
 
       await cache.invalidatePattern("debates:*");
-
-      res.json({ debateId: debate.id });
-
-      setTimeout(() => runDebateOrchestrator(debate.id, wss), 2000);
+      await queueDebateStep(debate.id, 2_000);
+      res.status(201).json({ debateId: debate.id });
     } catch (error) {
-      console.error("Error creating debate:", error);
+      logger.error({ err: error }, "Debate creation failed");
       res.status(500).json({ error: "Failed to create debate" });
     }
-  });
+    },
+  );
 
-  app.get("/api/debates/:id/arguments", async (req, res) => {
+  app.get("/api/debates/:id/arguments", validate({ params: resourceParamsSchema }), async (req, res) => {
     try {
+      const debate = await storage.getDebate(req.params.id);
+      if (!debate) {
+        return res.status(404).json({ error: "Debate not found" });
+      }
       const args = await storage.getArgumentsByDebate(req.params.id);
       const allVotes = await storage.getVotesByDebate(req.params.id);
 
@@ -281,37 +211,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/votes", async (req, res) => {
+  app.post(
+    "/api/votes",
+    requireUser,
+    rateLimit({ windowMs: 60 * 1000, maxRequests: 20, keyPrefix: "vote", keyGenerator: authenticatedRateLimitKey }),
+    validate({ body: voteRequestSchema }),
+    async (req, res) => {
     try {
-      const { argumentId, debateId, voterFingerprint } = req.body;
+      const { argumentId, debateId } = req.body;
+      const user = getAuthenticatedUser(req)!;
 
-      const hasVoted = await storage.hasVoted(argumentId, voterFingerprint);
+      const debate = await storage.getDebate(debateId);
+      const debateArguments = debate ? await storage.getArgumentsByDebate(debateId) : [];
+      if (!debate || !debateArguments.some((argument) => argument.id === argumentId)) {
+        return res.status(404).json({ error: "Argument not found for this debate" });
+      }
+
+      const hasVoted = await storage.hasVoted(argumentId, user.githubId);
       if (hasVoted) {
-        return res.status(400).json({ error: "Already voted" });
+        return res.status(409).json({ error: "Already voted", code: "ALREADY_VOTED" });
       }
 
       const vote = await storage.createVote({
         argumentId,
         debateId,
-        voterFingerprint,
+        // Retained while older databases still have a NOT NULL fingerprint column.
+        // The value is server-derived; clients cannot impersonate another voter.
+        voterFingerprint: user.githubId,
+        voterGithubId: user.githubId,
       });
 
       await cache.del(`debate:${debateId}:arguments`);
       await cache.del(`debate:${debateId}`);
       await cache.invalidatePattern("debates:*");
 
-      res.json(vote);
+      res.json({
+        id: vote.id,
+        argumentId: vote.argumentId,
+        debateId: vote.debateId,
+        createdAt: vote.createdAt,
+      });
     } catch (error) {
+      if (isUniqueViolation(error)) {
+        return res.status(409).json({ error: "Already voted", code: "ALREADY_VOTED" });
+      }
       res.status(500).json({ error: "Failed to record vote" });
     }
-  });
+    },
+  );
 
   // Debate controls
-  app.post("/api/debates/:id/pause", async (req, res) => {
+  app.post("/api/debates/:id/pause", requireUser, validate({ params: resourceParamsSchema }), async (req, res) => {
     try {
       const debate = await storage.getDebate(req.params.id);
       if (!debate) {
         return res.status(404).json({ error: "Debate not found" });
+      }
+      if (!isOwnedBy(getAuthenticatedUser(req)!.githubId, debate)) {
+        sendForbidden(res);
+        return;
       }
       if (debate.status !== "active") {
         return res.status(400).json({ error: "Can only pause active debates" });
@@ -328,14 +286,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/debates/:id/resume", async (req, res) => {
+  app.post("/api/debates/:id/resume", requireUser, validate({ params: resourceParamsSchema }), async (req, res) => {
     try {
       const debate = await storage.getDebate(req.params.id);
       if (!debate) {
         return res.status(404).json({ error: "Debate not found" });
       }
-      if (debate.status !== "paused") {
-        return res.status(400).json({ error: "Can only resume paused debates" });
+      if (!isOwnedBy(getAuthenticatedUser(req)!.githubId, debate)) {
+        sendForbidden(res);
+        return;
+      }
+      if (debate.status !== "paused" && debate.status !== "error") {
+        return res.status(400).json({ error: "Can only resume paused or failed debates" });
       }
       
       await storage.updateDebate(req.params.id, { status: "active" });
@@ -344,18 +306,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       broadcastToDebate(wss, req.params.id, { type: "status", status: "active" });
       
-      setTimeout(() => runDebateOrchestrator(req.params.id, wss), 1000);
+      await queueDebateStep(req.params.id, 1_000);
       res.json({ success: true, status: "active" });
     } catch (error) {
       res.status(500).json({ error: "Failed to resume debate" });
     }
   });
 
-  app.post("/api/debates/:id/skip", async (req, res) => {
+  app.post("/api/debates/:id/skip", requireUser, validate({ params: resourceParamsSchema }), async (req, res) => {
     try {
       const debate = await storage.getDebate(req.params.id);
       if (!debate) {
         return res.status(404).json({ error: "Debate not found" });
+      }
+      if (!isOwnedBy(getAuthenticatedUser(req)!.githubId, debate)) {
+        sendForbidden(res);
+        return;
       }
       if (debate.status === "completed") {
         return res.status(400).json({ error: "Debate already completed" });
@@ -368,7 +334,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await cache.del(`debate:${req.params.id}`);
       await cache.invalidatePattern("debates:*");
       
-      setTimeout(() => runDebateOrchestrator(req.params.id, wss), 500);
+      await queueDebateStep(req.params.id, 500);
       res.json({ success: true, message: "Skipping to final judgment" });
     } catch (error) {
       res.status(500).json({ error: "Failed to skip debate" });
@@ -391,22 +357,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/personas", async (req, res) => {
+  app.post("/api/personas", requireUser, validate({ body: personaRequestSchema }), async (req, res) => {
     try {
       const { name, tone, bias } = req.body;
-      if (!name || !tone || !bias) {
-        return res.status(400).json({ error: "Name, tone, and bias are required" });
-      }
-      const persona = await storage.createPersona({ name, tone, bias });
+      const persona = await storage.createPersona({
+        name,
+        tone,
+        bias,
+        createdByGithubId: getAuthenticatedUser(req)!.githubId,
+      });
       res.json(persona);
     } catch (error) {
       res.status(500).json({ error: "Failed to create persona" });
     }
   });
 
-  app.patch("/api/personas/:id", async (req, res) => {
+  app.patch("/api/personas/:id", requireUser, validate({ params: resourceParamsSchema, body: personaRequestSchema }), async (req, res) => {
     try {
       const { name, tone, bias } = req.body;
+      const persona = await storage.getPersona(req.params.id);
+      if (!persona) {
+        return res.status(404).json({ error: "Persona not found" });
+      }
+      if (!isOwnedBy(getAuthenticatedUser(req)!.githubId, persona)) {
+        sendForbidden(res);
+        return;
+      }
       const updated = await storage.updatePersona(req.params.id, { name, tone, bias });
       if (!updated) {
         return res.status(404).json({ error: "Persona not found" });
@@ -417,8 +393,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/personas/:id", async (req, res) => {
+  app.delete("/api/personas/:id", requireUser, validate({ params: resourceParamsSchema }), async (req, res) => {
     try {
+      const persona = await storage.getPersona(req.params.id);
+      if (!persona) {
+        return res.status(404).json({ error: "Persona not found" });
+      }
+      if (!isOwnedBy(getAuthenticatedUser(req)!.githubId, persona)) {
+        sendForbidden(res);
+        return;
+      }
       const deleted = await storage.deletePersona(req.params.id);
       if (!deleted) {
         return res.status(400).json({ error: "Cannot delete persona used in debates" });
@@ -429,7 +413,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/personas/:id/stats", async (req, res) => {
+  app.get("/api/personas/:id/stats", validate({ params: resourceParamsSchema }), async (req, res) => {
     try {
       const stats = await storage.getPersonaStats(req.params.id);
       res.json(stats);

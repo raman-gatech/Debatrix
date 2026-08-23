@@ -1,8 +1,10 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
 import { trace, SpanStatusCode, Span } from "@opentelemetry/api";
+import { createLogger } from "./logger";
 
 const SERVICE_NAME = "agora-sim";
+const logger = createLogger("telemetry");
 
 let sdk: NodeSDK | null = null;
 
@@ -18,14 +20,17 @@ export function initTelemetry() {
     });
 
     sdk.start();
-    console.log("[Telemetry] OpenTelemetry initialized");
-
-    process.on("SIGTERM", () => {
-      sdk?.shutdown().then(() => console.log("[Telemetry] Shutdown complete"));
-    });
+    logger.info("OpenTelemetry initialized");
   } else {
-    console.log("[Telemetry] OTEL_EXPORTER_OTLP_ENDPOINT not set, skipping telemetry");
+    logger.debug("OpenTelemetry endpoint not configured; tracing disabled");
   }
+}
+
+export async function shutdownTelemetry(): Promise<void> {
+  if (!sdk) return;
+  await sdk.shutdown();
+  sdk = null;
+  logger.info("OpenTelemetry shutdown complete");
 }
 
 export function getTracer() {

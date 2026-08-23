@@ -8,16 +8,32 @@ interface RateLimitConfig {
   windowMs: number;
   maxRequests: number;
   keyPrefix?: string;
+  keyGenerator?: (req: Request) => string;
+  skip?: (req: Request) => boolean;
 }
 
 const inMemoryStore = new Map<string, { count: number; resetAt: number }>();
 
 export function rateLimit(config: RateLimitConfig) {
-  const { windowMs, maxRequests, keyPrefix = "rl" } = config;
+  const { windowMs, maxRequests, keyPrefix = "rl", keyGenerator, skip } = config;
 
   return async (req: Request, res: Response, next: NextFunction) => {
+    if (skip?.(req)) return next();
     const ip = req.ip || req.socket.remoteAddress || "unknown";
-    const key = `${keyPrefix}:${ip}`;
+    const key = `${keyPrefix}:${keyGenerator?.(req) || ip}`;
+
+    const setRateLimitHeaders = (current: number, resetAt: number) => {
+      res.setHeader("X-RateLimit-Limit", maxRequests.toString());
+      res.setHeader("X-RateLimit-Remaining", Math.max(0, maxRequests - current).toString());
+      res.setHeader("X-RateLimit-Reset", Math.ceil(resetAt / 1000).toString());
+    };
+
+    const sendRateLimitExceeded = (current: number, resetAt: number) => {
+      logger.warn({ ip, key, current }, "Rate limit exceeded");
+      setRateLimitHeaders(current, resetAt);
+      res.setHeader("Retry-After", Math.max(1, Math.ceil((resetAt - Date.now()) / 1000)).toString());
+      res.status(429).json({ error: "Too many requests, please try again later", code: "RATE_LIMITED" });
+    };
 
     if (hasRedis) {
       const redis = getRedis();
@@ -29,13 +45,11 @@ export function rateLimit(config: RateLimitConfig) {
           }
 
           if (current > maxRequests) {
-            logger.warn({ ip, key, current }, "Rate limit exceeded");
-            res.status(429).json({ error: "Too many requests, please try again later" });
+            sendRateLimitExceeded(current, Date.now() + windowMs);
             return;
           }
 
-          res.setHeader("X-RateLimit-Limit", maxRequests.toString());
-          res.setHeader("X-RateLimit-Remaining", Math.max(0, maxRequests - current).toString());
+          setRateLimitHeaders(current, Date.now() + windowMs);
 
           return next();
         } catch (error) {
@@ -49,21 +63,18 @@ export function rateLimit(config: RateLimitConfig) {
 
     if (!record || now > record.resetAt) {
       inMemoryStore.set(key, { count: 1, resetAt: now + windowMs });
-      res.setHeader("X-RateLimit-Limit", maxRequests.toString());
-      res.setHeader("X-RateLimit-Remaining", (maxRequests - 1).toString());
+      setRateLimitHeaders(1, now + windowMs);
       return next();
     }
 
     record.count++;
 
     if (record.count > maxRequests) {
-      logger.warn({ ip, key, count: record.count }, "Rate limit exceeded (in-memory)");
-      res.status(429).json({ error: "Too many requests, please try again later" });
+      sendRateLimitExceeded(record.count, record.resetAt);
       return;
     }
 
-    res.setHeader("X-RateLimit-Limit", maxRequests.toString());
-    res.setHeader("X-RateLimit-Remaining", Math.max(0, maxRequests - record.count).toString());
+    setRateLimitHeaders(record.count, record.resetAt);
 
     next();
   };

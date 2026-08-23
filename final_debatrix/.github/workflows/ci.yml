@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: debatrix
+          POSTGRES_USER: debatrix
+          POSTGRES_PASSWORD: debatrix
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U debatrix -d debatrix"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+      - name: Build production container
+        run: docker build --tag debatrix:ci .
+      - name: Smoke test production container
+        run: |
+          set -euo pipefail
+          cleanup() { docker rm -f debatrix-ci-smoke >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker run --rm --network host \
+            -e DATABASE_URL=postgresql://debatrix:debatrix@127.0.0.1:5432/debatrix \
+            --entrypoint node debatrix:ci scripts/migrate.mjs
+          docker run -d --rm --name debatrix-ci-smoke --network host \
+            -e APP_ORIGIN=https://debatrix.example \
+            -e SESSION_SECRET=01234567890123456789012345678901 \
+            -e GITHUB_CLIENT_ID=ci-client \
+            -e GITHUB_CLIENT_SECRET=ci-secret \
+            -e OPENAI_API_KEY=ci-key \
+            -e DATABASE_URL=postgresql://debatrix:debatrix@127.0.0.1:5432/debatrix \
+            -e REDIS_URL=redis://127.0.0.1:6379 \
+            debatrix:ci
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5000/readyz; then exit 0; fi
+            sleep 1
+          done
+          docker logs debatrix-ci-smoke
+          exit 1

@@ -211,6 +211,21 @@ describe("MemStorage", () => {
       expect(args[1].content).toBe("Second argument");
       expect(args[1].persona.name).toBe("Persona B");
     });
+
+    it("counts arguments for several debates in one lookup", async () => {
+      const personaA = await storage.createPersona({ name: "Persona A", tone: "direct", bias: "neutral" });
+      const personaB = await storage.createPersona({ name: "Persona B", tone: "calm", bias: "neutral" });
+      const first = await storage.createDebate({ topic: "First topic", personaAId: personaA.id, personaBId: personaB.id, totalRounds: 1 });
+      const second = await storage.createDebate({ topic: "Second topic", personaAId: personaA.id, personaBId: personaB.id, totalRounds: 1 });
+      await storage.createArgument({ debateId: first.id, personaId: personaA.id, content: "First", roundNumber: 1 });
+      await storage.createArgument({ debateId: first.id, personaId: personaB.id, content: "Second", roundNumber: 1 });
+      await storage.createArgument({ debateId: second.id, personaId: personaA.id, content: "Third", roundNumber: 1 });
+
+      await expect(storage.getArgumentCountsByDebate([first.id, second.id])).resolves.toEqual({
+        [first.id]: 2,
+        [second.id]: 1,
+      });
+    });
   });
 
   describe("Votes", () => {
@@ -284,10 +299,11 @@ describe("MemStorage", () => {
         argumentId: argument.id,
         debateId: debate.id,
         voterFingerprint: "test-fingerprint",
+        voterGithubId: "github-user-1",
       });
 
-      const hasVoted = await storage.hasVoted(argument.id, "test-fingerprint");
-      const hasNotVoted = await storage.hasVoted(argument.id, "other-fingerprint");
+      const hasVoted = await storage.hasVoted(argument.id, "github-user-1");
+      const hasNotVoted = await storage.hasVoted(argument.id, "github-user-2");
 
       expect(hasVoted).toBe(true);
       expect(hasNotVoted).toBe(false);

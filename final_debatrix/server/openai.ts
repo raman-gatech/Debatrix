@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 
+type DebateCandidate = { id: string; name: string };
+
 let openai: OpenAI | null = null;
 
 function getOpenAI(): OpenAI {
@@ -78,8 +80,8 @@ Analyze both sides carefully and provide:
 1. A clear declaration of the winner (${personaAName} or ${personaBName})
 2. A detailed summary (3-5 paragraphs) explaining your reasoning, highlighting key strengths and weaknesses of each debater
 
-Format your response as:
-WINNER: [Name]
+Format your response exactly as:
+WINNER: [the exact winning debater name, with no punctuation or commentary]
 JUDGMENT: [Your detailed analysis]`;
 
   const completion = await getOpenAI().chat.completions.create({
@@ -92,22 +94,36 @@ JUDGMENT: [Your detailed analysis]`;
   });
 
   const response = completion.choices[0].message.content || "";
-  
-  const winnerMatch = response.match(/WINNER:\s*(.+?)(?:\n|$)/i);
-  const judgmentMatch = response.match(/JUDGMENT:\s*([\s\S]+)/i);
-  
-  const winnerName = winnerMatch ? winnerMatch[1].trim() : "";
   const personaAId = allArguments.find(a => a.personaName === personaAName)?.personaId || "";
   const personaBId = allArguments.find(a => a.personaName === personaBName)?.personaId || "";
-  
-  let winnerId = "";
-  if (winnerName.toLowerCase().includes(personaAName.toLowerCase())) {
-    winnerId = personaAId;
-  } else if (winnerName.toLowerCase().includes(personaBName.toLowerCase())) {
-    winnerId = personaBId;
-  }
-  
-  const judgmentSummary = judgmentMatch ? judgmentMatch[1].trim() : response;
 
-  return { winnerId, judgmentSummary };
+  return parseJudgmentResponse(response, [
+    { id: personaAId, name: personaAName },
+    { id: personaBId, name: personaBName },
+  ]);
+}
+
+function normalizeName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+export function parseJudgmentResponse(
+  response: string,
+  candidates: [DebateCandidate, DebateCandidate],
+): { winnerId: string; judgmentSummary: string } {
+  const winnerMatch = response.match(/^WINNER:\s*(.+?)\s*$/im);
+  const judgmentMatch = response.match(/^JUDGMENT:\s*([\s\S]+)$/im);
+  const winnerName = winnerMatch?.[1] ?? "";
+  const judgmentSummary = judgmentMatch?.[1].trim() ?? "";
+  const normalizedWinner = normalizeName(winnerName);
+  const matchingCandidates = candidates.filter((candidate) => normalizeName(candidate.name) === normalizedWinner);
+
+  if (matchingCandidates.length !== 1 || !matchingCandidates[0].id) {
+    throw new Error("OpenAI judge returned an unrecognized winner");
+  }
+  if (judgmentSummary.length === 0) {
+    throw new Error("OpenAI judge returned an empty judgment");
+  }
+
+  return { winnerId: matchingCandidates[0].id, judgmentSummary };
 }

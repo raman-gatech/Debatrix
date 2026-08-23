@@ -22,4 +22,7 @@ COPY --from=build /app/scripts ./scripts
 USER node
 EXPOSE 5000
 
-CMD ["node", "dist/index.js"]
+# Migrations are transactional, advisory-lock protected, and tracked. Running
+# them at startup keeps managed platforms without a pre-deploy job (including
+# free tiers) from serving an unmigrated database.
+CMD ["sh", "-c", "node scripts/migrate.mjs && node dist/index.js"]

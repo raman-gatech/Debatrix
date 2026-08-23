@@ -210,6 +210,13 @@ export default function DebateRoom() {
 
   const debateArgs = argumentsData?.debateArguments || [];
   const canControlDebate = auth?.user?.githubId === debate.createdByGithubId;
+  const emptyDebateMessage = debate.status === "error"
+    ? "The AI provider could not continue this debate. Restore API access, then select Retry."
+    : debate.status === "paused"
+      ? "This debate is paused. Select Resume when you are ready to continue."
+      : debate.status === "completed"
+        ? "This debate completed without published arguments."
+        : "Debate will start shortly...";
 
   return (
     <div className="min-h-screen">
@@ -287,7 +294,7 @@ export default function DebateRoom() {
               {debateArgs.length === 0 && !isTyping ? (
                 <Card className="p-8 text-center">
                   <p className="text-muted-foreground">
-                    Debate will start shortly...
+                    {emptyDebateMessage}
                   </p>
                 </Card>
               ) : (

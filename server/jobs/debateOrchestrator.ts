@@ -1,4 +1,5 @@
 import type { Job } from "bullmq";
+import { randomUUID } from "node:crypto";
 import { cache, hasRedis, pubsub } from "../lib/redis";
 import { generateArgument, judgeDebate } from "../openai";
 import { storage } from "../storage";
@@ -20,8 +21,9 @@ export function phaseFor(round: number, argumentCount: number): string {
 // BullMQ reserves `:` for its internal Redis key structure, so application
 // supplied job IDs must not contain it. Keep the human-readable phase format
 // for state comparisons while using a Redis-safe representation for the job.
-export function jobIdFor(debateId: string, phase: string): string {
-  return `debate-${debateId}-${phase.replaceAll(":", "-")}`;
+export function jobIdFor(debateId: string, phase: string, retryToken?: string): string {
+  const id = `debate-${debateId}-${phase.replaceAll(":", "-")}`;
+  return retryToken ? `${id}-retry-${retryToken}` : id;
 }
 
 async function getCurrentPhase(debateId: string): Promise<string | null> {
@@ -61,7 +63,11 @@ export async function handleExhaustedDebateStep(job: Job<DebateStepJobData>, err
   });
 }
 
-export async function queueDebateStep(debateId: string, delay = 0): Promise<void> {
+export async function queueDebateStep(
+  debateId: string,
+  delay = 0,
+  options: { forceNewJob?: boolean } = {},
+): Promise<void> {
   const phase = await getCurrentPhase(debateId);
   if (!phase) return;
 
@@ -78,10 +84,12 @@ export async function queueDebateStep(debateId: string, delay = 0): Promise<void
 
   await addJob(DEBATE_ORCHESTRATION_QUEUE, "advance-debate", data, {
     delay,
-    jobId: jobIdFor(debateId, phase),
-    // Free completed phase IDs so a debate paused before work begins can be
-    // resumed at the same state without being blocked by an old job record.
+    // A retry after an exhausted job must not reuse that failed job's ID.
+    jobId: jobIdFor(debateId, phase, options.forceNewJob ? randomUUID() : undefined),
+    // Free terminal job IDs so future resumes are never blocked by a stale
+    // completed or failed record for the same debate phase.
     removeOnComplete: true,
+    removeOnFail: true,
   });
 }
 

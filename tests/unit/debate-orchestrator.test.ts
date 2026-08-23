@@ -18,4 +18,11 @@ describe("durable debate orchestration", () => {
     expect(jobId).toBe("debate-debate-123-round-1-arguments-0");
     expect(jobId).not.toContain(":");
   });
+
+  it("gives a user-initiated retry a fresh job ID", () => {
+    const phase = phaseFor(1, 0);
+
+    expect(jobIdFor("debate-123", phase, "retry-1")).toBe("debate-debate-123-round-1-arguments-0-retry-retry-1");
+    expect(jobIdFor("debate-123", phase, "retry-2")).not.toBe(jobIdFor("debate-123", phase, "retry-1"));
+  });
 });

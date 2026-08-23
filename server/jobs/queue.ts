@@ -95,6 +95,7 @@ export async function addJob(
     priority?: number;
     jobId?: string;
     removeOnComplete?: boolean | number;
+    removeOnFail?: boolean | number;
   }
 ): Promise<Job | null> {
   const queue = queues.get(queueName);
@@ -108,6 +109,7 @@ export async function addJob(
     priority: options?.priority,
     jobId: options?.jobId,
     removeOnComplete: options?.removeOnComplete,
+    removeOnFail: options?.removeOnFail,
   });
 
   logger.debug({ jobId: job.id, queue: queueName, name }, "Job added");

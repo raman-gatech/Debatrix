@@ -306,7 +306,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       broadcastToDebate(wss, req.params.id, { type: "status", status: "active" });
       
-      await queueDebateStep(req.params.id, 1_000);
+      // An exhausted job may still exist in Redis. Use a fresh job ID so a
+      // user-initiated retry can be enqueued after the underlying issue is fixed.
+      await queueDebateStep(req.params.id, 1_000, { forceNewJob: true });
       res.json({ success: true, status: "active" });
     } catch (error) {
       res.status(500).json({ error: "Failed to resume debate" });

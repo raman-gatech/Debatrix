@@ -204,7 +204,7 @@ The production service requires PostgreSQL, Redis, GitHub OAuth, and an OpenAI A
 https://<your-domain>/api/auth/github/callback
 ```
 
-Build an immutable image, migrate the target database, and only then start the new revision:
+Build an immutable image. The container runs the idempotent migration runner before starting the application, which supports managed platforms without a separate pre-deploy job. For platforms that support release jobs, also run the migration explicitly before routing traffic to the new revision:
 
 ```bash
 docker build -t debatrix:<version> .
@@ -520,7 +520,7 @@ tests/
 | `GET /healthz` | The HTTP process is running. | Container or process liveness checks. |
 | `GET /readyz` | PostgreSQL and Redis are reachable. | Load-balancer readiness and deployment rollout gates. |
 
-Run database migrations as a release step before starting a new application revision. Migrations are transactional, recorded in `schema_migrations`, and guarded by a PostgreSQL advisory lock, so it is safe for an orchestrator to invoke the command more than once. They are forward-only: roll back application images, not database schema migrations.
+Run database migrations as a release step before starting a new application revision when the platform supports it. The production container also runs them at startup, so platforms without a pre-deploy job do not serve an unmigrated database. Migrations are transactional, recorded in `schema_migrations`, and guarded by a PostgreSQL advisory lock, so repeated invocations are safe. They are forward-only: roll back application images, not database schema migrations.
 
 ### Security and secret handling
 

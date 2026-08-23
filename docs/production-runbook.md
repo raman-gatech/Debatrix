@@ -22,7 +22,7 @@ Generate a `SESSION_SECRET` with at least 32 random bytes. Do not place secrets 
 
 ## Deployment steps
 
-1. Run `npm run db:migrate` against the target database. It serializes deploys with a PostgreSQL advisory lock, records completed migrations, and is safe to rerun. Run it as a release step before starting the new application image.
+1. When the platform supports a release job, run `npm run db:migrate` against the target database before deployment. It serializes deploys with a PostgreSQL advisory lock, records completed migrations, and is safe to rerun. The production container repeats this idempotent migration step at startup so platforms without pre-deploy jobs do not serve an unmigrated database.
 2. Build an immutable image: `docker build -t debatrix:<version> .`
 3. Deploy it with all required environment variables injected by the hosting platform.
 4. Wait for `/readyz` to return HTTP 200 before sending traffic to the new instance.

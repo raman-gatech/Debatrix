@@ -30,6 +30,9 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // Tailwind v3 emits selectors that Lightning CSS cannot safely minify.
+    // Esbuild preserves the generated CSS and matches the prior Vite behavior.
+    cssMinify: "esbuild",
   },
   server: {
     fs: {

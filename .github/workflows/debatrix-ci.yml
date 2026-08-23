@@ -74,8 +74,18 @@ jobs:
             -e REDIS_URL=redis://127.0.0.1:6379 \
             debatrix:ci
           for attempt in {1..30}; do
-            if curl --fail --silent --show-error http://127.0.0.1:5000/readyz; then exit 0; fi
+            readiness="$(curl --fail --silent http://127.0.0.1:5000/readyz || true)"
+            if jq --exit-status '.status == "ready" and .checks.database and .checks.redis' <<<"$readiness" >/dev/null 2>&1; then
+              break
+            fi
             sleep 1
           done
-          docker logs debatrix-ci-smoke
-          exit 1
+          if ! jq --exit-status '.status == "ready" and .checks.database and .checks.redis' <<<"$readiness" >/dev/null 2>&1; then
+            docker logs debatrix-ci-smoke
+            exit 1
+          fi
+          curl --fail --silent --show-error 'http://127.0.0.1:5000/api/debates?status=all' | jq --exit-status 'type == "array"' >/dev/null
+          curl --fail --silent --show-error \
+            --header 'content-type: application/json' \
+            --data '{"query":"query { debates { id } }"}' \
+            http://127.0.0.1:5000/graphql | jq --exit-status '.data.debates | type == "array"' >/dev/null

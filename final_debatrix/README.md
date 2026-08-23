@@ -93,8 +93,8 @@ You will also need:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/debatrix.git
-cd debatrix
+git clone https://github.com/raman-gatech/Debatrix.git
+cd Debatrix/final_debatrix
 ```
 
 ### 2. Install Dependencies
@@ -205,9 +205,6 @@ npm start
 ```bash
 # Apply tracked database migrations
 npm run db:migrate
-
-# Open Drizzle Studio (database GUI)
-npm run db:studio
 ```
 
 ### Running Tests

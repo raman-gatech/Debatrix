@@ -1,4 +1,5 @@
 import { Switch, Route } from "wouter";
+import { lazy, Suspense } from "react";
 import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -6,23 +7,25 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import NotFound from "@/pages/not-found";
-import Home from "@/pages/home";
-import NewDebate from "@/pages/new-debate";
-import DebateRoom from "@/pages/debate-room";
-import Dashboard from "@/pages/dashboard";
-import Personas from "@/pages/personas";
+const NotFound = lazy(() => import("@/pages/not-found"));
+const Home = lazy(() => import("@/pages/home"));
+const NewDebate = lazy(() => import("@/pages/new-debate"));
+const DebateRoom = lazy(() => import("@/pages/debate-room"));
+const Dashboard = lazy(() => import("@/pages/dashboard"));
+const Personas = lazy(() => import("@/pages/personas"));
 
 function Router() {
   return (
-    <Switch>
-      <Route path="/" component={Home} />
-      <Route path="/new-debate" component={NewDebate} />
-      <Route path="/debate/:id" component={DebateRoom} />
-      <Route path="/dashboard" component={Dashboard} />
-      <Route path="/personas" component={Personas} />
-      <Route component={NotFound} />
-    </Switch>
+    <Suspense fallback={<main className="mx-auto max-w-7xl p-4" role="status">Loading application…</main>}>
+      <Switch>
+        <Route path="/" component={Home} />
+        <Route path="/new-debate" component={NewDebate} />
+        <Route path="/debate/:id" component={DebateRoom} />
+        <Route path="/dashboard" component={Dashboard} />
+        <Route path="/personas" component={Personas} />
+        <Route component={NotFound} />
+      </Switch>
+    </Suspense>
   );
 }
 

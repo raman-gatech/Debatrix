@@ -10,9 +10,32 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 - CI typechecks, runs the test suite, builds the client and server, audits production dependencies, builds the Docker image, and starts it against PostgreSQL and Redis until `/readyz` succeeds.
 - Development may use in-memory storage and synchronous debate scheduling when external services are intentionally absent. Those fallbacks are disabled in production.
 
+## Quick start (local)
+
+For the full application experience, run local PostgreSQL and Redis, then configure GitHub OAuth and OpenAI. The following starts disposable local services with development-only credentials:
+
+```bash
+docker run -d --name debatrix-postgres \
+  -e POSTGRES_DB=debatrix \
+  -e POSTGRES_USER=debatrix \
+  -e POSTGRES_PASSWORD=debatrix \
+  -p 5432:5432 postgres:16-alpine
+
+docker run -d --name debatrix-redis -p 6379:6379 redis:7-alpine
+
+cp .env.example .env
+# Edit .env: set NODE_ENV=development, then supply GitHub OAuth and OpenAI credentials.
+npm ci
+npm run db:migrate
+npm run dev
+```
+
+Open `http://localhost:5000`. Configure the GitHub OAuth callback URL as `http://localhost:5000/api/auth/github/callback` for local development. Stop and remove the local services when finished with `docker rm -f debatrix-postgres debatrix-redis`.
+
 ## Table of Contents
 
 - [Production posture](#production-posture)
+- [Quick start (local)](#quick-start-local)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
@@ -20,12 +43,14 @@ A modern, full-stack AI-powered debate platform where AI personas engage in stru
 - [Environment Variables](#environment-variables)
 - [Running the Application](#running-the-application)
 - [Project Structure](#project-structure)
+- [Authentication and authorization](#authentication-and-authorization)
 - [API Endpoints](#api-endpoints)
 - [GraphQL API](#graphql-api)
 - [WebSocket Events](#websocket-events)
 - [Testing](#testing)
 - [Architecture Overview](#architecture-overview)
-- [Production Deployment](#production-deployment)
+- [Production deployment](#production-deployment)
+- [Operations and troubleshooting](#operations-and-troubleshooting)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -100,7 +125,7 @@ cd Debatrix/final_debatrix
 ### 2. Install Dependencies
 
 ```bash
-npm install
+npm ci
 ```
 
 ### 3. Set Up Environment Variables
@@ -148,8 +173,9 @@ The application will be available at `http://localhost:5000`
 | `GITHUB_CLIENT_ID`            | **Yes in production** | - | GitHub OAuth application client ID. |
 | `GITHUB_CLIENT_SECRET`        | **Yes in production** | - | GitHub OAuth application client secret. |
 | `DATABASE_URL`                | **Yes in production** | - | PostgreSQL connection string; use `sslmode=require` when required by the provider. |
-| `REDIS_URL`                   | **Yes in production** | - | Redis connection string for durable jobs and distributed rate limits. |
+| `REDIS_URL` or `UPSTASH_REDIS_URL` | **Yes in production** | - | Redis connection string for durable jobs and distributed rate limits. |
 | `OPENAI_API_KEY`              | **Yes in production** | - | OpenAI API key for debate generation and judging. |
+| `PORT`                        | No | `5000` | HTTP port supplied by the platform or local environment. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | - | OpenTelemetry collector endpoint for tracing. |
 | `LOG_LEVEL`                   | No | `info` | Logging level: `debug`, `info`, `warn`, `error`. |
 | `NODE_ENV`                    | No | `development` | Environment: `development` or `production`. |
@@ -172,13 +198,22 @@ LOG_LEVEL=info
 
 ## Production Deployment
 
-The production service requires PostgreSQL, Redis, GitHub OAuth, and an OpenAI API key. Build the deployment image with:
+The production service requires PostgreSQL, Redis, GitHub OAuth, and an OpenAI API key. It fails fast if any required production configuration is missing. Before deploying, create a GitHub OAuth application and register this callback URL:
 
-```bash
-docker build -t debatrix:latest .
+```text
+https://<your-domain>/api/auth/github/callback
 ```
 
-Use `/healthz` for liveness and `/readyz` for PostgreSQL/Redis readiness checks. The required environment variables, deployment procedure, and rollback steps are in [docs/production-runbook.md](docs/production-runbook.md).
+Build an immutable image, migrate the target database, and only then start the new revision:
+
+```bash
+docker build -t debatrix:<version> .
+docker run --rm \
+  -e DATABASE_URL='postgresql://…' \
+  debatrix:<version> node scripts/migrate.mjs
+```
+
+Inject every required environment variable through the hosting platform's secret store—never through the image, repository, or browser bundle. Route HTTPS traffic only after `/readyz` returns HTTP 200. Use `/healthz` for liveness and `/readyz` for PostgreSQL/Redis readiness. The [production runbook](docs/production-runbook.md) covers release checks, rollback constraints, and routine monitoring.
 
 ## Running the Application
 
@@ -205,6 +240,18 @@ npm start
 ```bash
 # Apply tracked database migrations
 npm run db:migrate
+```
+
+### Verification Commands
+
+```bash
+# Type checking, unit/integration tests, and production build
+npm run check
+npm test
+npm run build
+
+# Production dependency audit (fails on high/critical findings)
+npm run audit:prod
 ```
 
 ### Running Tests
@@ -271,7 +318,17 @@ debatrix/
 └── package.json
 ```
 
+## Authentication and authorization
+
+GitHub OAuth identifies users; the application stores only the GitHub identity fields needed for the session and ownership checks. Start sign-in at `GET /api/auth/github`. On success, GitHub redirects to `GET /api/auth/github/callback`, which creates an HTTP-only session cookie. `GET /api/auth/me` returns the signed-in user and `POST /api/auth/logout` ends the session.
+
+Read-only REST and GraphQL queries are public. Creating debates, managing personas, voting, and controlling a debate require a signed-in user. Persona and debate control operations additionally require the resource owner. The application rate-limits all API traffic and applies stricter per-user limits to debate creation and voting.
+
+For browser clients, do not invent or persist an application token: rely on the same-origin session cookie. The frontend already follows that model.
+
 ## API Endpoints
+
+Unless marked otherwise, `POST`, `PATCH`, and `DELETE` endpoints require a GitHub-authenticated session. Validate payload fields against the REST errors returned by the server or the GraphQL schema; malformed requests return `400` with a `VALIDATION_ERROR` code.
 
 ### Debates
 
@@ -414,9 +471,6 @@ The project uses Vitest for testing.
 # Run all tests
 npm run test
 
-# Run tests with coverage
-npm run test:coverage
-
 # Run tests in watch mode
 npm run test:watch
 ```
@@ -444,35 +498,51 @@ tests/
 - **Express.js** REST API with GraphQL layer
 - **Drizzle ORM** for type-safe database queries
 - **WebSocket server** for real-time communication
-- **BullMQ** for background job processing (when Redis available)
-- **Graceful fallbacks** - works without Redis/PostgreSQL
+- **BullMQ** for durable background job processing
+- **Development-only fallbacks** - in-memory storage and synchronous scheduling are available only outside production
 
 ### Data Flow
 
 1. User creates a debate via REST/GraphQL
 2. Server initializes debate and starts orchestration
-3. AI arguments generated via OpenAI API (queued if Redis available)
+3. AI arguments generated via OpenAI API through durable Redis-backed jobs
 4. WebSocket broadcasts updates to connected clients
 5. Frontend updates via React Query invalidation
 6. Votes recorded and tallied in real-time
 7. AI judge determines winner at debate conclusion
 
-## Deployment
+## Operations and troubleshooting
 
-### Deploying on Replit
+### Health checks and rollout
 
-1. Fork this repository to Replit
-2. Add your `OPENAI_API_KEY` in the Secrets tab
-3. Click "Run" to start the application
-4. Use the "Publish" button to deploy
+| Endpoint | Meaning | Use it for |
+| -------- | ------- | ---------- |
+| `GET /healthz` | The HTTP process is running. | Container or process liveness checks. |
+| `GET /readyz` | PostgreSQL and Redis are reachable. | Load-balancer readiness and deployment rollout gates. |
 
-### Deploying Elsewhere
+Run database migrations as a release step before starting a new application revision. Migrations are transactional, recorded in `schema_migrations`, and guarded by a PostgreSQL advisory lock, so it is safe for an orchestrator to invoke the command more than once. They are forward-only: roll back application images, not database schema migrations.
 
-1. Build the application: `npm run build`
-2. Set environment variables on your hosting platform
-3. Run: `npm start`
+### Security and secret handling
 
-The application binds to port 5000 by default.
+- Terminate TLS at the platform or reverse proxy and set `APP_ORIGIN` to the exact HTTPS URL users visit.
+- Keep `SESSION_SECRET`, OAuth credentials, database credentials, Redis credentials, and the OpenAI key in the platform secret manager. Rotate a secret if it has ever been committed or exposed.
+- Configure the GitHub OAuth callback exactly as `https://<your-domain>/api/auth/github/callback`; a mismatch causes sign-in to fail.
+- Do not expose `OPENAI_API_KEY`, `SESSION_SECRET`, or database URLs in any `VITE_*` variable. Vite variables are bundled into browser code.
+- The service sends security headers, uses secure HTTP-only cookies in production, and disables GraphQL introspection in production.
+
+### Common failures
+
+| Symptom | Likely cause | Resolution |
+| ------- | ------------ | ---------- |
+| Server exits during startup | A required production variable is missing or invalid. | Compare the platform configuration against [`.env.example`](.env.example); `APP_ORIGIN` must be HTTPS and `SESSION_SECRET` must be at least 32 characters. |
+| `/healthz` works but `/readyz` fails | PostgreSQL or Redis is unavailable or the connection URL is wrong. | Check network access, TLS/`sslmode` requirements, credentials, and provider IP/firewall rules. |
+| GitHub sign-in returns to `?authError=github` | OAuth callback URL, client credentials, or session configuration is incorrect. | Verify the callback URL character-for-character and ensure the browser is using the configured `APP_ORIGIN`. |
+| A debate is marked `error` | OpenAI generation or a durable job exhausted its retries. | Inspect structured logs and queue failures, correct the underlying key/provider issue, then use the owner-only resume action. |
+| WebSocket updates do not arrive | A proxy is not forwarding WebSocket upgrades or the public origin is misconfigured. | Enable WebSocket upgrade support on the proxy and test `wss://<your-domain>/ws` from the deployed frontend. |
+
+### What to monitor
+
+Monitor HTTP error rate and latency, `/readyz`, database pool saturation, Redis connection errors, BullMQ queue latency and failures, OpenAI API failures, and the count of debates in the recoverable `error` state. Back up PostgreSQL and periodically test a restore.
 
 ## Contributing
 
